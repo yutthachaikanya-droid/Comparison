@@ -35,13 +35,18 @@ for k in ('extracted', 'grouped'):
 # ─── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## ⚙️ ตั้งค่า")
-    api_key = st.text_input("🔑 Anthropic API Key", type="password",
-                             help="ขอได้ที่ console.anthropic.com/keys")
+    # ดึง API Key จาก Streamlit Secrets ก่อน ถ้าไม่มีค่อยให้ user กรอก
+    _secret_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+    if _secret_key:
+        api_key = _secret_key
+        st.success("🔐 API Key พร้อมใช้งาน")
+    else:
+        api_key = st.text_input("🔑 Anthropic API Key", type="password",
+                                 help="ขอได้ที่ console.anthropic.com/keys")
     project_name = st.text_input("📌 ชื่อโปรเจกต์", placeholder="เช่น KPSxMonchhichi 2026")
     st.markdown("---")
     st.markdown("""**📋 วิธีใช้งาน**
-1. ใส่ Anthropic API Key
-2. ระบุชื่อโปรเจกต์
+1. ระบุชื่อโปรเจกต์
 3. อัพโหลดใบเสนอราคา (PDF/รูป)
 4. กด **ประมวลผล**
 5. ดูผล → ดาวน์โหลด Excel → ส่ง Email
@@ -275,7 +280,7 @@ go_btn = c1.button("🔍 ประมวลผล", type="primary",
                     disabled=not (files and api_key), use_container_width=True)
 
 if not api_key:
-    st.info("👈 ใส่ **Anthropic API Key** ในแถบซ้ายก่อนประมวลผล")
+    st.info("👈 ติดต่อผู้ดูแลระบบเพื่อขอสิทธิ์ใช้งาน หรือใส่ API Key ในแถบซ้าย")
 
 if go_btn and files and api_key:
     client = anthropic.Anthropic(api_key=api_key)
