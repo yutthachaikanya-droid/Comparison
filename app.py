@@ -1,6 +1,6 @@
 import streamlit as st
-import google.generativeai as genai
-import base64
+from google import genai
+from google.genai import types
 import json
 import io
 import re
@@ -35,7 +35,7 @@ with st.sidebar:
                                  help="ขอฟรีได้ที่ aistudio.google.com/apikey")
     project_name = st.text_input("📌 ชื่อโปรเจกต์", placeholder="เช่น KPSxMonchhichi 2026")
     st.markdown("---")
-    st.markdown("**วิธีใช้งาน**\n1. ระบุชื่อโปรเจกต์\n2. อัพโหลดใบเสนอราคา\n3. กด **ประมวลผล**\n\nAPI Key ฟรีที่ aistudio.google.com")
+    st.markdown("**วิธีใช้งาน**\n1. ระบุชื่อโปรเจกต์\n2. อัพโหลดใบเสนอราคา\n3. กด **ประมวลผล**")
     st.markdown("---")
     if st.button("ล้างข้อมูล", use_container_width=True):
         st.session_state.extracted=[]; st.session_state.grouped={}; st.rerun()
@@ -77,13 +77,19 @@ PROMPT = (
 )
 
 def extract_one(f, api_key):
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    client = genai.Client(api_key=api_key, http_options={"api_version": "v1"})
     f.seek(0)
     file_bytes = f.read()
     mt = mime_type(f.name)
-    part = {"mime_type": mt, "data": file_bytes}
-    response = model.generate_content([part, PROMPT])
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=[
+            types.Content(parts=[
+                types.Part.from_bytes(data=file_bytes, mime_type=mt),
+                types.Part.from_text(text=PROMPT),
+            ])
+        ],
+    )
     raw = response.text.strip()
     raw = re.sub(r"^```(?:json)?\n?", "", raw)
     raw = re.sub(r"\n?```$", "", raw)
