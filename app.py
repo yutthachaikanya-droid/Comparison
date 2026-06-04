@@ -1,11 +1,10 @@
 import streamlit as st
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import base64
 import json
 import io
 import re
-import tempfile
-import os
 from datetime import datetime
 import plotly.graph_objects as go
 import openpyxl
@@ -14,7 +13,6 @@ from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="Supplier Price Comparison", page_icon="📊",
                    layout="wide", initial_sidebar_state="expanded")
-
 st.markdown("""<style>
 .hdr{background:#203764;color:#fff;padding:1.25rem 1.75rem;border-radius:12px;margin-bottom:1.5rem}
 .hdr h1{margin:0;font-size:1.7rem}
@@ -27,7 +25,6 @@ for k,v in [('extracted',[]),('grouped',{})]:
 
 COLORS=['#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6','#EC4899','#14B8A6','#F97316']
 
-# ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## ⚙️ ตั้งค่า")
     _secret = st.secrets.get("GOOGLE_API_KEY","") if hasattr(st,"secrets") else ""
@@ -39,111 +36,88 @@ with st.sidebar:
                                  help="ขอฟรีได้ที่ aistudio.google.com/apikey")
     project_name = st.text_input("📌 ชื่อโปรเจกต์", placeholder="เช่น KPSxMonchhichi 2026")
     st.markdown("---")
-    st.markdown("""**📋 วิธีใช้งาน**
-1. ระบุชื่อโปรเจกต์
-2. อัพโหลดใบเสนอราคา
-3. กด **ประมวลผล**
-
-💡 API Key ฟรีที่ **aistudio.google.com**""")
+    st.markdown("**วิธีใช้งาน**\n1. ระบุชื่อโปรเจกต์\n2. อัพโหลดใบเสนอราคา\n3. กด **ประมวลผล**\n\nAPI Key ฟรีที่ aistudio.google.com")
     st.markdown("---")
-    if st.button("🗑️ ล้างข้อมูล", use_container_width=True):
+    if st.button("ล้างข้อมูล", use_container_width=True):
         st.session_state.extracted=[]; st.session_state.grouped={}; st.rerun()
 
-# ── Header ─────────────────────────────────────────────────────────────────────
 st.markdown("""<div class="hdr">
-  <h1>📊 Supplier Price Comparison</h1>
+  <h1>Supplier Price Comparison</h1>
   <p>อัพโหลดใบเสนอราคา → AI วิเคราะห์อัตโนมัติ → เปรียบเทียบราคา → ดาวน์โหลด Excel</p>
 </div>""", unsafe_allow_html=True)
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-def mime(name):
+def mime_type(name):
     ext=name.lower().rsplit('.',1)[-1]
-    return {'pdf':'application/pdf','png':'image/png',
-            'jpg':'image/jpeg','jpeg':'image/jpeg'}.get(ext,'image/jpeg')
+    return {'pdf':'application/pdf','png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg'}.get(ext,'image/jpeg')
 
-PROMPT="""อ่านใบเสนอราคานี้อย่างละเอียด ส่งคืนเฉพาะ JSON เท่านั้น ห้ามมีข้อความอื่น:
-
-{
-  "product_category": "ชื่อหมวดสินค้า",
-  "supplier": "ชื่อบริษัทผู้เสนอราคา",
-  "ref": "เลขที่ใบเสนอราคา",
-  "date": "วันที่",
-  "brand": "ชื่อแบรนด์",
-  "material": "วัตถุดิบ/วัสดุ",
-  "spec": "ขนาด/Spec",
-  "payment": "เงื่อนไขชำระเงิน",
-  "shipment": "ระยะเวลาส่งมอบ",
-  "tooling": null,
-  "remark": "หมายเหตุ",
-  "options": [
-    {
-      "option_name": "Option 1 หรือชื่อ supplier ถ้ามีตัวเดียว",
-      "other_detail": "รายละเอียดการพิมพ์ เคลือบ ฯลฯ",
-      "moq_prices": [
-        {"qty": 3000, "price": 7.80},
-        {"qty": 5000, "price": 5.40}
-      ]
-    }
-  ]
-}
-
-กฎ: หลาย Option → แยกใน options[], price = ราคาต่อชิ้นเท่านั้น, qty = จำนวนเต็ม"""
+PROMPT = (
+    "อ่านใบเสนอราคานี้อย่างละเอียด ส่งคืนเฉพาะ JSON เท่านั้น ห้ามมีข้อความอื่น:\n\n"
+    '{\n'
+    '  "product_category": "ชื่อหมวดสินค้า",\n'
+    '  "supplier": "ชื่อบริษัทผู้เสนอราคา",\n'
+    '  "ref": "เลขที่ใบเสนอราคา",\n'
+    '  "date": "วันที่",\n'
+    '  "brand": "ชื่อแบรนด์",\n'
+    '  "material": "วัตถุดิบ/วัสดุ",\n'
+    '  "spec": "ขนาด/Spec",\n'
+    '  "payment": "เงื่อนไขชำระเงิน",\n'
+    '  "shipment": "ระยะเวลาส่งมอบ",\n'
+    '  "tooling": null,\n'
+    '  "remark": "หมายเหตุ",\n'
+    '  "options": [\n'
+    '    {\n'
+    '      "option_name": "Option 1",\n'
+    '      "other_detail": "รายละเอียดการพิมพ์ เคลือบ ฯลฯ",\n'
+    '      "moq_prices": [\n'
+    '        {"qty": 3000, "price": 7.80}\n'
+    '      ]\n'
+    '    }\n'
+    '  ]\n'
+    '}\n\n'
+    "กฎ: หลาย Option แยกใน options[], price = ราคาต่อชิ้นเท่านั้น, qty = จำนวนเต็ม"
+)
 
 def extract_one(f, api_key):
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
-
+    client = genai.Client(api_key=api_key)
     f.seek(0)
     file_bytes = f.read()
-    mt = mime(f.name)
-    ext = f.name.rsplit('.', 1)[-1].lower()
-
-    # เขียนไฟล์ชั่วคราว แล้ว upload ให้ Gemini อ่าน
-    with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tmp:
-        tmp.write(file_bytes)
-        tmp_path = tmp.name
-    try:
-        uploaded = genai.upload_file(path=tmp_path, mime_type=mt)
-        response  = model.generate_content([uploaded, PROMPT])
-        try:
-            genai.delete_file(uploaded.name)
-        except:
-            pass
-    finally:
-        os.unlink(tmp_path)
-
+    mt = mime_type(f.name)
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=[
+            types.Content(parts=[
+                types.Part.from_bytes(data=file_bytes, mime_type=mt),
+                types.Part.from_text(text=PROMPT),
+            ])
+        ],
+    )
     raw = response.text.strip()
-    raw = re.sub(r'^```(?:json)?\n?', '', raw)
-    raw = re.sub(r'\n?```$', '', raw)
+    raw = re.sub(r"^```(?:json)?\n?", "", raw)
+    raw = re.sub(r"\n?```$", "", raw)
     return json.loads(raw)
 
 def group_by_cat(items):
     g={}
     for it in items:
-        cat=it.get('product_category') or 'ไม่ระบุ'
-        g.setdefault(cat,[]).append(it)
+        g.setdefault(it.get('product_category') or 'ไม่ระบุ',[]).append(it)
     return g
 
 def build_sheet(cat,items):
-    all_moqs=sorted({e['qty'] for it in items
-                     for opt in it.get('options',[])
-                     for e in opt.get('moq_prices',[])
-                     if isinstance(e.get('qty'),int)})
+    all_moqs=sorted({e['qty'] for it in items for opt in it.get('options',[])
+                     for e in opt.get('moq_prices',[]) if isinstance(e.get('qty'),int)})
     sups=[]
     for it in items:
         for opt in it.get('options',[]):
             mp={str(e['qty']):e['price'] for e in opt.get('moq_prices',[]) if e.get('price') is not None}
-            sups.append({
-                'col_header':f"{it.get('supplier','')}\n{opt.get('option_name','')}".strip('\n'),
-                'date':it.get('date',''),'attach':it.get('ref',''),
-                'product_name':it.get('product_category',''),'ref':it.get('ref',''),
-                'brand':it.get('brand',''),'material':it.get('material',''),
-                'other_detail':opt.get('other_detail',''),'supplier':it.get('supplier',''),
-                'spec':it.get('spec',''),'payment':it.get('payment',''),
-                'moq_prices':mp,'tooling':it.get('tooling'),
-                'min_order':f"{min(all_moqs):,} pcs." if all_moqs else '',
-                'shipment':it.get('shipment',''),'remark':it.get('remark','')
-            })
+            sups.append({'col_header':f"{it.get('supplier','')}\n{opt.get('option_name','')}".strip('\n'),
+                         'date':it.get('date',''),'attach':it.get('ref',''),
+                         'product_name':it.get('product_category',''),'ref':it.get('ref',''),
+                         'brand':it.get('brand',''),'material':it.get('material',''),
+                         'other_detail':opt.get('other_detail',''),'supplier':it.get('supplier',''),
+                         'spec':it.get('spec',''),'payment':it.get('payment',''),
+                         'moq_prices':mp,'tooling':it.get('tooling'),
+                         'min_order':f"{min(all_moqs):,} pcs." if all_moqs else '',
+                         'shipment':it.get('shipment',''),'remark':it.get('remark','')})
     return {'name':cat,'moq_list':all_moqs,'suppliers':sups}
 
 def make_chart(sd):
@@ -180,7 +154,7 @@ def make_excel(grouped,title):
     for cat,items in grouped.items():
         sd=build_sheet(cat,items); ws=wb.create_sheet(title=cat[:31])
         moqs=[int(m) for m in sd['moq_list']]; sups=sd['suppliers']; tc=1+len(sups)
-        mlbls=[f"Product Cost @ {m:,} pcs (THB)" for m in moqs]; labels=TOP+mlbls+BOT
+        labels=TOP+[f"Product Cost @ {m:,} pcs (THB)" for m in moqs]+BOT
         ws.merge_cells(start_row=1,start_column=1,end_row=1,end_column=tc)
         h=ws.cell(1,1); h.value="Comparison"; h.fill=DARK
         h.font=Font(color="FFFFFF",bold=True,size=14); h.alignment=CTR; h.border=BDR
@@ -233,49 +207,43 @@ def make_email(grouped,title):
         try:
             best=min(sd['suppliers'],key=lambda s:float(s['moq_prices'].get(lm) or s['moq_prices'].get(str(lm)) or 1e9))
             bp=float(best['moq_prices'].get(lm) or best['moq_prices'].get(str(lm)) or 0)
-            lines.append(f"  • {cat}: {best.get('col_header','').replace(chr(10),' ')} @ ฿{bp:.2f}/pcs (MOQ {int(lm):,} pcs)")
+            lines.append(f"  - {cat}: {best.get('col_header','').replace(chr(10),' ')} @ {bp:.2f} bht/pcs (MOQ {int(lm):,} pcs)")
         except: pass
-    warns=[f"  • {cat} ({it.get('supplier','')}): {it.get('remark','')}"
+    warns=[f"  - {cat} ({it.get('supplier','')}): {it.get('remark','')}"
            for cat,items in grouped.items() for it in items if it.get('remark')]
     total_opts=sum(sum(len(it.get('options',[])) for it in items) for items in grouped.values())
-    return f"""เรียน ทีม Marketing,
-
-ทีมจัดซื้อได้เปรียบเทียบใบเสนอราคาสำหรับ {title or 'โปรเจกต์นี้'}
-จาก {total_opts} ตัวเลือก ใน {len(grouped)} หมวดสินค้า เรียบร้อยแล้ว
-
-📌 สรุปราคาที่ดีที่สุด (ณ {today}):
-{chr(10).join(lines) or '  (ไม่มีข้อมูลราคา)'}
-
-📎 แนบไฟล์: Price_Comparison.xlsx
-{(chr(10)+'⚠️ หมายเหตุ:'+chr(10)+chr(10).join(warns)) if warns else ''}
-กรุณาแจ้งจำนวน Order ภายใน 1 สัปดาห์
-
-ขอบคุณครับ/ค่ะ
-ทีมจัดซื้อ"""
+    warn_block = ("\n\nหมายเหตุ:\n" + "\n".join(warns)) if warns else ""
+    return (f"เรียน ทีม Marketing,\n\n"
+            f"ทีมจัดซื้อได้เปรียบเทียบใบเสนอราคาสำหรับ {title or 'โปรเจกต์นี้'}\n"
+            f"จาก {total_opts} ตัวเลือก ใน {len(grouped)} หมวดสินค้า เรียบร้อยแล้ว\n\n"
+            f"สรุปราคาที่ดีที่สุด (ณ {today}):\n"
+            f"{chr(10).join(lines) or '  (ไม่มีข้อมูลราคา)'}"
+            f"{warn_block}\n\n"
+            f"แนบไฟล์: Price_Comparison.xlsx\n\n"
+            f"กรุณาแจ้งจำนวน Order ภายใน 1 สัปดาห์\n\nขอบคุณครับ/ค่ะ\nทีมจัดซื้อ")
 
 def show_results(grouped, title):
     today=datetime.now().strftime("%Y%m%d")
     m1,m2,m3,m4=st.columns(4)
     total_opts=sum(sum(len(it.get('options',[])) for it in items) for items in grouped.values())
-    m1.metric("หมวดสินค้า",len(grouped))
-    m2.metric("ตัวเลือก Supplier",total_opts)
+    m1.metric("หมวดสินค้า",len(grouped)); m2.metric("ตัวเลือก Supplier",total_opts)
     m3.metric("ไฟล์ที่วิเคราะห์",len(st.session_state.extracted))
     m4.metric("วันที่",datetime.now().strftime("%d/%m/%Y"))
-    st.markdown("#### 📥 ดาวน์โหลด")
+    st.markdown("#### ดาวน์โหลด")
     d1,d2,_=st.columns([1,1,2])
     xl=make_excel(grouped,title)
-    d1.download_button("📊 Excel (.xlsx)",data=xl,
+    d1.download_button("Excel (.xlsx)",data=xl,
                        file_name=f"Price_Comparison_{(title or 'Report').replace(' ','_')}_{today}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                        use_container_width=True)
     sheets_list=[build_sheet(cat,items) for cat,items in grouped.items()]
     jb=json.dumps({"title":title or "Price Comparison","date":datetime.now().strftime("%d/%m/%Y"),
                    "sheets":sheets_list},ensure_ascii=False,indent=2).encode('utf-8')
-    d2.download_button("📄 JSON (Dashboard)",data=jb,
+    d2.download_button("JSON (Dashboard)",data=jb,
                        file_name=f"Price_Comparison_{today}_data.json",
                        mime="application/json",use_container_width=True)
     st.markdown("---")
-    st.subheader("📊 ผลเปรียบเทียบรายหมวดสินค้า")
+    st.subheader("ผลเปรียบเทียบรายหมวดสินค้า")
     tabs=st.tabs(list(grouped.keys()))
     for tab,(cat,items) in zip(tabs,grouped.items()):
         with tab:
@@ -288,9 +256,9 @@ def show_results(grouped, title):
                 valid=[(s,p) for s,p in valid if p<1e9]
                 if valid:
                     bs,bp=min(valid,key=lambda x:x[1])
-                    st.success(f"🏆 แนะนำ: **{bs.get('col_header','').replace(chr(10),' — ')}**  ราคา ฿{bp:,.2f}/pcs ที่ MOQ {int(lm):,} pcs")
+                    st.success(f"แนะนำ: {bs.get('col_header','').replace(chr(10),' — ')}  ราคา {bp:,.2f} บาท/pcs ที่ MOQ {int(lm):,} pcs")
             for s in sups:
-                with st.expander(f"📋 {s.get('col_header','').replace(chr(10),' — ')}"):
+                with st.expander(s.get('col_header','').replace(chr(10),' — ')):
                     c1,c2=st.columns(2)
                     with c1:
                         st.write(f"**Supplier:** {s.get('supplier','-')}")
@@ -300,51 +268,47 @@ def show_results(grouped, title):
                         st.write(f"**Ref:** {s.get('ref','-')}")
                         st.write(f"**ชำระเงิน:** {s.get('payment','-')}")
                         st.write(f"**ส่งของ:** {s.get('shipment','-')}")
-                    if s.get('remark'): st.warning(f"⚠️ {s['remark']}")
+                    if s.get('remark'): st.warning(s['remark'])
                     if moqs:
-                        st.markdown("**ราคาตาม MOQ:**")
                         cols=st.columns(len(moqs))
                         for col,m in zip(cols,moqs):
                             p=float(s['moq_prices'].get(m) or s['moq_prices'].get(str(m)) or 0)
                             col.metric(f"{int(m):,} pcs",f"฿{p:,.2f}" if p else "N/A")
     st.markdown("---")
-    st.subheader("✉️ ร่างอีเมล์ถึงทีม MKT")
-    st.text_area("",make_email(grouped,title),height=300,label_visibility="collapsed")
-    st.caption("💡 Ctrl+A แล้ว Ctrl+C เพื่อ copy ทั้งหมด")
+    st.subheader("ร่างอีเมล์ถึงทีม MKT")
+    st.text_area("",make_email(grouped,title),height=280,label_visibility="collapsed")
+    st.caption("Ctrl+A แล้ว Ctrl+C เพื่อ copy ทั้งหมด")
 
-# ── Upload & Process ──────────────────────────────────────────────────────────
-st.subheader("📂 อัพโหลดใบเสนอราคา")
-files=st.file_uploader("เลือกไฟล์ (PDF หรือรูปภาพ) — อัพโหลดหลายไฟล์พร้อมกันได้",
+# ── Main ──────────────────────────────────────────────────────────────────────
+st.subheader("อัพโหลดใบเสนอราคา")
+files=st.file_uploader("เลือกไฟล์ PDF หรือรูปภาพ — อัพโหลดหลายไฟล์พร้อมกันได้",
                         type=['pdf','png','jpg','jpeg'],accept_multiple_files=True,
                         label_visibility="collapsed")
 if files:
-    st.caption(f"📎 เลือกแล้ว {len(files)} ไฟล์: "+", ".join(f.name for f in files))
-
+    st.caption(f"เลือกแล้ว {len(files)} ไฟล์: "+", ".join(f.name for f in files))
 if not api_key:
-    st.info("👈 ใส่ Google AI API Key ในแถบซ้าย — ขอฟรีได้ที่ **aistudio.google.com/apikey**")
+    st.info("ใส่ Google AI API Key ในแถบซ้าย — ขอฟรีได้ที่ aistudio.google.com/apikey")
 
 c1,_=st.columns([1,5])
-go_btn=c1.button("🔍 ประมวลผล",type="primary",
-                  disabled=not(files and api_key),use_container_width=True)
+go_btn=c1.button("ประมวลผล",type="primary",disabled=not(files and api_key),use_container_width=True)
 
 if go_btn and files and api_key:
-    extracted=[]; errors=[]
+    extracted=[]
     prog=st.progress(0); status=st.empty()
     for i,f in enumerate(files):
-        status.text(f"⏳ กำลังอ่าน: {f.name}  ({i+1}/{len(files)})")
+        status.text(f"กำลังอ่าน: {f.name}  ({i+1}/{len(files)})")
         try:
             d=extract_one(f,api_key); d['_file']=f.name; extracted.append(d)
         except Exception as e:
-            errors.append(f.name)
-            st.error(f"❌ อ่านไม่สำเร็จ: **{f.name}**\n\n`{str(e)}`")
+            st.error(f"อ่านไม่สำเร็จ: {f.name}\n\n{str(e)}")
         prog.progress((i+1)/len(files))
     prog.empty(); status.empty()
     if extracted:
         st.session_state.extracted=extracted
         st.session_state.grouped=group_by_cat(extracted)
-        st.success(f"✅ ประมวลผลสำเร็จ {len(extracted)}/{len(files)} ไฟล์ — เลื่อนลงดูผลด้านล่าง")
+        st.success(f"ประมวลผลสำเร็จ {len(extracted)}/{len(files)} ไฟล์ — เลื่อนลงดูผลด้านล่าง")
     else:
-        st.error("❌ ไม่สามารถอ่านไฟล์ได้เลย กรุณาตรวจสอบ API Key")
+        st.error("ไม่สามารถอ่านไฟล์ได้ กรุณาตรวจสอบ API Key")
 
 if st.session_state.grouped:
     st.markdown("---")
