@@ -77,7 +77,7 @@ PROMPT = (
 )
 
 def extract_one(f, api_key):
-    client = genai.Client(api_key=api_key, http_options={"api_version": "v1"})
+    client = genai.Client(api_key=api_key)
     f.seek(0)
     file_bytes = f.read()
     mt = mime_type(f.name)
